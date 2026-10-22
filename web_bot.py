@@ -16,7 +16,7 @@ if sys.platform == "win32":
 load_dotenv()
 API_KEY = os.getenv("OPENROUTER_API_KEY")
 API_URL = "https://openrouter.ai/api/v1/chat/completions"
-MODEL = "openrouter/free"
+MODEL = os.getenv("OPENROUTER_MODEL", "nvidia/nemotron-3.5-lightning:free")
 
 SYSTEM_PROMPT = """You are 'FitCoach AI', a supportive, motivating, and knowledgeable personal fitness coach and sports nutritionist.
 
@@ -428,33 +428,72 @@ class FitnessBotHandler(BaseHTTPRequestHandler):
             try:
                 data = json.loads(body)
                 user_messages = data.get("messages", [])
-                
+
+                api_key = (os.getenv("OPENROUTER_API_KEY") or API_KEY or "").strip()
+                if not api_key or api_key in ("None", "your_key_here"):
+                    error_msg = (
+                        "OPENROUTER_API_KEY is missing. If deployed on Render, "
+                        "go to Render Dashboard -> fitcoach-ai -> Environment -> Add 'OPENROUTER_API_KEY'."
+                    )
+                    res_payload = json.dumps({"error": error_msg})
+                    self.send_response(500)
+                    self.send_header("Content-Type", "application/json; charset=utf-8")
+                    self.end_headers()
+                    self.wfile.write(res_payload.encode("utf-8"))
+                    return
+
                 # Prepend the system prompt
                 full_messages = [{"role": "system", "content": SYSTEM_PROMPT}] + user_messages
 
-                response = requests.post(
-                    API_URL,
-                    headers={
-                        "Authorization": f"Bearer {API_KEY}",
-                        "Content-Type": "application/json",
-                        "HTTP-Referer": "http://localhost:5000",
-                        "X-Title": "Personal Fitness Coach Web App",
-                    },
-                    json={
-                        "model": MODEL,
-                        "messages": full_messages,
-                    },
-                    timeout=60,
-                )
+                candidates = [
+                    os.getenv("OPENROUTER_MODEL", "").strip(),
+                    MODEL,
+                    "minimax/minimax-m3.1-flash:free",
+                    "openrouter/free",
+                ]
+                models_to_try = []
+                for m in candidates:
+                    if m and m not in models_to_try:
+                        models_to_try.append(m)
 
-                if response.ok:
-                    res_data = response.json()
-                    reply = res_data["choices"][0]["message"]["content"]
+                reply = None
+                last_error = None
+                status_code = 502
+
+                for current_model in models_to_try:
+                    try:
+                        response = requests.post(
+                            API_URL,
+                            headers={
+                                "Authorization": f"Bearer {api_key}",
+                                "Content-Type": "application/json",
+                                "HTTP-Referer": "https://fitcoach-ai.onrender.com",
+                                "X-Title": "Personal Fitness Coach Web App",
+                            },
+                            json={
+                                "model": current_model,
+                                "messages": full_messages,
+                            },
+                            timeout=60,
+                        )
+                        if response.ok:
+                            res_data = response.json()
+                            content = res_data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                            if content and not content.strip().startswith("User Safety:"):
+                                reply = content
+                                break
+                        else:
+                            status_code = response.status_code
+                            last_error = f"API error {response.status_code}: {response.text[:200]}"
+                    except Exception as req_err:
+                        last_error = str(req_err)
+
+                if reply:
                     res_payload = json.dumps({"reply": reply})
                     self.send_response(200)
                 else:
-                    res_payload = json.dumps({"error": f"API error {response.status_code}: {response.text[:200]}"})
-                    self.send_response(response.status_code)
+                    res_payload = json.dumps({"error": last_error or "Unable to get response from AI provider."})
+                    self.send_response(status_code)
 
             except Exception as e:
                 res_payload = json.dumps({"error": str(e)})

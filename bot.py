@@ -21,8 +21,7 @@ if not API_KEY:
     raise SystemExit("Error: OPENROUTER_API_KEY not found in .env file. Please check your .env file.")
 
 API_URL = "https://openrouter.ai/api/v1/chat/completions"
-# Using openrouter/free model router
-MODEL = "openrouter/free"
+MODEL = os.getenv("OPENROUTER_MODEL", "nvidia/nemotron-3.5-lightning:free")
 
 SYSTEM_PROMPT = """You are 'FitCoach AI', a supportive, motivating, and knowledgeable personal fitness coach and sports nutritionist.
 
